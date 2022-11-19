@@ -1,5 +1,6 @@
+//use bevy::diagnostic::{FrameTimeDiagnosticsPlugin, LogDiagnosticsPlugin};
 use bevy::prelude::*;
-use bevy::diagnostic::{FrameTimeDiagnosticsPlugin, LogDiagnosticsPlugin};
+//use std::env;
 
 #[derive(Component)]
 struct Velocity(f32, f32);
@@ -14,18 +15,29 @@ struct Block;
 struct Ball;
 
 #[derive(Component)]
+struct Lifes(i8);
+
+struct LostLifeEvent();
+struct LostGameEvent();
+
+#[derive(Component)]
 //Up, right, down, left
 struct Collision(bool, bool, bool, bool);
 
 fn main() {
+    //env::set_var("RUST_BACKTRACE", "1");
     App::new()
         .add_plugins(DefaultPlugins)
-        .add_plugin(LogDiagnosticsPlugin::default())
-        .add_plugin(FrameTimeDiagnosticsPlugin::default())
+        //.add_plugin(LogDiagnosticsPlugin::default())
+        //.add_plugin(FrameTimeDiagnosticsPlugin::default())
+        .add_event::<LostLifeEvent>()
+        .add_event::<LostGameEvent>()
         .add_startup_system(setup)
         .add_system(ball_movement)
         .add_system(player_controller)
         .add_system(check_ball_collision)
+        .add_system(player_loses_life)
+        .add_system(lost_game_handler)
         .run();
 }
 
@@ -70,17 +82,18 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
         },
         Velocity(0., 0.),
         Collision(false, false, false, false),
+        Lifes(3),
         Player,
     ));
 }
 
 fn check_ball_collision(
-    mut ball_query: Query<(&Ball, &mut Transform, &mut Velocity, Without<Player>)>,
-    player_query: Query<(&Player, &Transform, &Velocity, Without<Ball>)>,
+    mut ball_query: Query<(&Ball, &mut Transform, &mut Velocity), Without<Player>>,
+    player_query: Query<(&Player, &Transform, &Velocity), Without<Ball>>,
 ) {
     let player_pos = player_query.single().1;
     let player_vel = player_query.single().2;
-    for (_, ball_pos, mut ball_dir, _) in &mut ball_query {
+    for (_, ball_pos, mut ball_dir) in &mut ball_query {
         if (player_pos.translation.x - ball_pos.translation.x).abs() < 160.
             && (player_pos.translation.y - ball_pos.translation.y).abs() < 45.
         {
@@ -90,8 +103,11 @@ fn check_ball_collision(
     }
 }
 
-fn ball_movement(mut ball_query: Query<(&mut Transform, &mut Velocity, With<Ball>)>) {
-    for (mut transform, mut curr_dir, _) in &mut ball_query {
+fn ball_movement(
+    mut lost_life: EventWriter<LostLifeEvent>,
+    mut ball_query: Query<(&mut Transform, &mut Velocity), With<Ball>>,
+) {
+    for (mut transform, mut curr_dir) in &mut ball_query {
         if curr_dir.0 == 0. && curr_dir.1 == 0. {
             curr_dir.0 = 0.7;
             curr_dir.1 = 1.5;
@@ -101,34 +117,16 @@ fn ball_movement(mut ball_query: Query<(&mut Transform, &mut Velocity, With<Ball
         //si choca con una pared
         if transform.translation.x > 449. && curr_dir.0 > 0. {
             curr_dir.0 = curr_dir.0 * -0.9;
-            //info!("x_speed: {}, y_speed:{}", curr_dir.0, curr_dir.1);
-            //info!(
-            //    "curr_pos: x{} y{}",
-            //    transform.translation.x, transform.translation.y
-            //);
         } else if transform.translation.x < -450. && curr_dir.0 < 0. {
             curr_dir.0 = 0. * -0.9;
-            //info!("x_speed: {}, y_speed:{}", curr_dir.0, curr_dir.1);
-            //info!(
-            //    "curr_pos: x{} y{}",
-            //    transform.translation.x, transform.translation.y
-            //);
         } else if transform.translation.y > 349. && curr_dir.1 > 0. {
             curr_dir.1 = curr_dir.1 * -0.9;
-            //info!("x_speed: {}, y_speed:{}", curr_dir.0, curr_dir.1);
-            //info!(
-            //    "curr_pos: x{} y{}",
-            //    transform.translation.x, transform.translation.y
-            //);
         }
         if transform.translation.y < -350. && curr_dir.1 < 0. {
-            curr_dir.1 = curr_dir.1 * -0.9;
-            //info!(transform.translation.y);
-            //info!("x_speed: {}, y_speed:{}", curr_dir.0, curr_dir.1);
-            ////info!(
-            //    "curr_pos: x{} y{}",
-            //    transform.translation.x, transform.translation.y
-            //);
+            lost_life.send(LostLifeEvent());
+            transform.translation = Vec3::ZERO;
+            curr_dir.0 = 0.;
+            curr_dir.1 = 0.;
         } else {
             transform.translation.x += curr_dir.0;
             transform.translation.y += curr_dir.1;
@@ -136,18 +134,65 @@ fn ball_movement(mut ball_query: Query<(&mut Transform, &mut Velocity, With<Ball
     }
 }
 
+fn player_loses_life(
+    mut lost_game: EventWriter<LostGameEvent>,
+    mut ev_loselife: EventReader<LostLifeEvent>,
+    mut player_query: Query<&mut Lifes, With<Player>>,
+) {
+    let mut player_lifes = player_query.single_mut();
+    for _ev in ev_loselife.iter() {
+        if player_lifes.0 >= 1 {
+            player_lifes.0 -= 1;
+            info!("Player lost life, current lifes: {}", player_lifes.0);
+        } else {
+            lost_game.send(LostGameEvent());
+            info!("Game Lost!")
+        }
+    }
+}
+
+fn lost_game_handler(
+    asset_server: Res<AssetServer>,
+    ball_query: Query<Entity, With<Ball>>,
+    mut ev_lostgame: EventReader<LostGameEvent>,
+    mut commands: Commands,
+) {
+    for _ev in ev_lostgame.iter() {
+        commands.spawn((TextBundle::from_section(
+            "Game\nLost!",
+            TextStyle {
+                font: asset_server.load("font.ttf"),
+                font_size: 100.0,
+                color: Color::WHITE,
+            },
+        )
+        .with_text_alignment(TextAlignment::TOP_CENTER)
+        .with_style(Style {
+            position_type: PositionType::Absolute,
+            position: UiRect {
+                bottom: Val::Px(5.0),
+                right: Val::Px(15.0),
+                ..default()
+            },
+            ..default()
+        }),));
+        info!("despawning entities");
+        commands.entity(ball_query.single()).despawn();
+    }
+}
+
 fn player_controller(
-    mut player_query: Query<(&mut Transform, &mut Velocity, &mut Collision, With<Player>)>,
+    mut player_query: Query<(&mut Transform, &mut Velocity, &mut Collision), With<Player>>,
     keyboard_input_event: Res<Input<KeyCode>>,
 ) {
-    for (mut transform, mut curr_dir, mut collision, _) in &mut player_query {
+    for (mut transform, mut curr_dir, mut collision) in &mut player_query {
         if keyboard_input_event.pressed(KeyCode::A) {
-            if collision.1 == false && curr_dir.0 >= -1.5 {
-                curr_dir.0 -= 0.03;
+            if collision.1 == false && curr_dir.0 >= -2.5 {
+                curr_dir.0 -= 0.05;
             }
         } else if keyboard_input_event.pressed(KeyCode::D) {
-            if collision.3 == false && curr_dir.0 <= 1.5 {
-                curr_dir.0 += 0.03;
+            if collision.3 == false && curr_dir.0 <= 2.5 {
+                curr_dir.0 += 0.05;
             }
         };
 
