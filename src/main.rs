@@ -9,7 +9,7 @@ struct Velocity(f32, f32);
 struct Player;
 
 #[derive(Component)]
-struct Block;
+struct Brick;
 
 #[derive(Component)]
 struct Ball;
@@ -25,6 +25,17 @@ struct LostGameEvent();
 struct Collision(bool, bool, bool, bool);
 
 #[derive(Component)]
+struct Wall(WallDirection);
+
+enum WallDirection {
+    Top,
+    Left,
+    Right,
+}
+
+struct BreakBrickEvent(Entity);
+
+#[derive(Component)]
 struct ScoreBoard();
 
 #[derive(Component)]
@@ -38,7 +49,12 @@ fn main() {
         //.add_plugin(FrameTimeDiagnosticsPlugin::default())
         .add_event::<LostLifeEvent>()
         .add_event::<LostGameEvent>()
+        .add_event::<BreakBrickEvent>()
         .add_startup_system(setup)
+        .add_startup_system(setup_scoreboard)
+        .add_startup_system(setup_bricks)
+        .add_system(change_colors)
+        .add_system(break_event_handler)
         .add_system(update_scoreboard)
         .add_system(ball_movement)
         .add_system(player_controller)
@@ -48,8 +64,12 @@ fn main() {
         .run();
 }
 
-fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
-    commands.spawn(Camera2dBundle::default());
+//x > 449 Left
+//x < -450 Right
+//aprox. 900
+//y > 349 Top
+
+fn setup_scoreboard(mut commands: Commands, asset_server: Res<AssetServer>) {
     commands.spawn((
         TextBundle::from_sections([
             //Score
@@ -93,6 +113,51 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
         }),
         ScoreBoard(),
     ));
+}
+
+fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
+    commands.spawn(Camera2dBundle::default());
+    commands.spawn((
+        //wall
+        SpriteBundle {
+            texture: asset_server.load("rect.png"),
+            transform: Transform {
+                translation: Vec3::new(-650., 0., 1.),
+                rotation: Quat::from_axis_angle(Vec3::Y, 90.),
+                scale: Vec3::new(0.4, 10., 1.0),
+                ..default()
+            },
+            ..default()
+        },
+        Wall(WallDirection::Left),
+    ));
+    commands.spawn((
+        //wall
+        SpriteBundle {
+            texture: asset_server.load("rect.png"),
+            transform: Transform {
+                translation: Vec3::new(620., 0., 1.),
+                rotation: Quat::from_axis_angle(Vec3::Y, 90.),
+                scale: Vec3::new(0.4, 10., 1.0),
+                ..default()
+            },
+            ..default()
+        },
+        Wall(WallDirection::Right),
+    ));
+    commands.spawn((
+        //wall
+        SpriteBundle {
+            texture: asset_server.load("rect.png"),
+            transform: Transform {
+                translation: Vec3::new(0., 430., 1.),
+                scale: Vec3::new(4., 1., 1.0),
+                ..default()
+            },
+            ..default()
+        },
+        Wall(WallDirection::Top),
+    ));
     commands.spawn((
         //ball
         SpriteBundle {
@@ -107,18 +172,6 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
         Velocity(0., 0.),
         Ball,
     ));
-    // commands.spawn((
-    //     SpriteBundle {
-    //         texture: asset_server.load("a.png"),
-    //         transform: Transform {
-    //             translation: Vec3::new(0., -320., 1.),
-    //             scale: Vec3::new(0.75, 0.3, 1.0),
-    //             ..default()
-    //         },
-    //         ..default()
-    //     },
-    //     Block,
-    // ));
     commands.spawn((
         SpriteBundle {
             //player
@@ -138,19 +191,80 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
     ));
 }
 
+fn setup_bricks(mut commands: Commands, asset_server: Res<AssetServer>) {
+    for h in 0..3 {
+        for i in 0..5 {
+            commands.spawn((
+                SpriteBundle {
+                    texture: asset_server.load("rect.png"),
+                    transform: Transform {
+                        translation: Vec3::new(-455. + 200. * i as f32, 270. - 75. * h as f32, 1.),
+                        scale: Vec3::new(0.45, 0.3, 1.0),
+                        ..default()
+                    },
+                    ..default()
+                },
+                Brick,
+            ));
+        }
+    }
+}
+
 fn check_ball_collision(
+    mut broke_brick: EventWriter<BreakBrickEvent>,
     mut ball_query: Query<(&Ball, &mut Transform, &mut Velocity), Without<Player>>,
     player_query: Query<(&Player, &Transform, &Velocity), Without<Ball>>,
+    brick_query: Query<(&Brick, &Transform, Entity), Without<Ball>>,
 ) {
-    let player_pos = player_query.single().1;
-    let player_vel = player_query.single().2;
+    let (_, player_pos, player_velocity) = player_query.single();
     for (_, ball_pos, mut ball_dir) in &mut ball_query {
         if (player_pos.translation.x - ball_pos.translation.x).abs() < 160.
             && (player_pos.translation.y - ball_pos.translation.y).abs() < 45.
         {
-            ball_dir.0 = ball_dir.0 * -1.2 + player_vel.0;
+            ball_dir.0 = ball_dir.0 * -1.2 + player_velocity.0;
             ball_dir.1 = ball_dir.1 * -1.1;
         }
+        for (_, brick_pos, curr_brick) in brick_query.iter() {
+            if (ball_pos.translation.x - brick_pos.translation.x).abs() < 80.
+                && (brick_pos.translation.y - ball_pos.translation.y).abs() < 45.
+            {
+                broke_brick.send(BreakBrickEvent(curr_brick));
+                ball_dir.0 = ball_dir.0 * -1.2;
+                ball_dir.1 = ball_dir.1 * -1.1;
+            }
+        }
+    }
+}
+
+fn break_event_handler(
+    mut commands: Commands,
+    mut ev_broke_brick: EventReader<BreakBrickEvent>,
+    mut score_query: Query<&mut Score, With<Player>>,
+) {
+    for ev in ev_broke_brick.iter() {
+        commands.entity(ev.0).despawn();
+        score_query.single_mut().0 += 1;
+    }
+}
+
+fn change_colors(
+    mut player_query: Query<(&Player, &mut Sprite), (Without<Wall>, Without<Brick>)>,
+    mut wall_query: Query<(&Wall, &mut Sprite), Without<Brick>>,
+    mut bricks_query: Query<(&Brick, &mut Sprite), Without<Wall>>,
+) {
+    let mut player_sprite = player_query.single_mut().1;
+    player_sprite.color = Color::rgb(0., 52., 89.);
+    for (_, mut wall_sprite) in wall_query.iter_mut() {
+        wall_sprite.color = Color::rgb(0., 23., 31.);
+    }
+    let mut i = 0;
+    for (_, mut brick_sprite) in bricks_query.iter_mut() {
+        if i % 2 == 0 {
+            brick_sprite.color = Color::rgb(0., 126., 167.);
+        } else {
+            brick_sprite.color = Color::rgb(0., 168., 232.);
+        }
+        i += 1;
     }
 }
 
@@ -177,9 +291,9 @@ fn ball_movement(
             curr_dir.1 = 0.2;
         }
         //si choca con una pared
-        if transform.translation.x > 449. && curr_dir.0 > 0. {
+        if transform.translation.x > 550. && curr_dir.0 > 0. {
             curr_dir.0 = curr_dir.0 * -0.9;
-        } else if transform.translation.x < -450. && curr_dir.0 < 0. {
+        } else if transform.translation.x < -560. && curr_dir.0 < 0. {
             curr_dir.0 = 0. * -0.9;
         } else if transform.translation.y > 349. && curr_dir.1 > 0. {
             curr_dir.1 = curr_dir.1 * -0.9;
@@ -205,10 +319,8 @@ fn player_loses_life(
     for _ev in ev_loselife.iter() {
         if player_lifes.0 >= 1 {
             player_lifes.0 -= 1;
-            info!("Player lost life, current lifes: {}", player_lifes.0);
         } else {
             lost_game.send(LostGameEvent());
-            info!("Game Lost!")
         }
     }
 }
@@ -238,7 +350,6 @@ fn lost_game_handler(
             },
             ..default()
         }),));
-        info!("despawning entities");
         commands.entity(ball_query.single()).despawn();
     }
 }
@@ -258,17 +369,17 @@ fn player_controller(
             }
         };
 
-        if transform.translation.x > 150. && collision.1 == true {
+        if transform.translation.x > -380. && collision.1 == true {
             collision.1 = false;
         }
-        if transform.translation.x < 350. && collision.3 == true {
+        if transform.translation.x < 380. && collision.3 == true {
             collision.3 = false;
         }
-        if transform.translation.x > 419. && collision.3 == false {
+        if transform.translation.x > 460. && collision.3 == false {
             collision.3 = true;
             curr_dir.0 = 0.;
             //info!(transform.translation.x);
-        } else if transform.translation.x < -420. && collision.1 == false {
+        } else if transform.translation.x < -480. && collision.1 == false {
             collision.1 = true;
             curr_dir.0 = 0.;
             //info!(transform.translation.x);
