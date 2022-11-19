@@ -24,6 +24,12 @@ struct LostGameEvent();
 //Up, right, down, left
 struct Collision(bool, bool, bool, bool);
 
+#[derive(Component)]
+struct ScoreBoard();
+
+#[derive(Component)]
+struct Score(i16);
+
 fn main() {
     //env::set_var("RUST_BACKTRACE", "1");
     App::new()
@@ -33,6 +39,7 @@ fn main() {
         .add_event::<LostLifeEvent>()
         .add_event::<LostGameEvent>()
         .add_startup_system(setup)
+        .add_system(update_scoreboard)
         .add_system(ball_movement)
         .add_system(player_controller)
         .add_system(check_ball_collision)
@@ -43,6 +50,49 @@ fn main() {
 
 fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
     commands.spawn(Camera2dBundle::default());
+    commands.spawn((
+        TextBundle::from_sections([
+            //Score
+            TextSection::new(
+                "Score: ",
+                TextStyle {
+                    font: asset_server.load("font.ttf"),
+                    font_size: 45.0,
+                    color: Color::WHITE,
+                },
+            ),
+            TextSection::from_style(TextStyle {
+                font: asset_server.load("font.ttf"),
+                font_size: 45.0,
+                color: Color::WHITE,
+            }),
+            //Lifes
+            TextSection::new(
+                "\nLifes: ",
+                TextStyle {
+                    font: asset_server.load("font.ttf"),
+                    font_size: 45.0,
+                    color: Color::WHITE,
+                },
+            ),
+            TextSection::from_style(TextStyle {
+                font: asset_server.load("font.ttf"),
+                font_size: 45.0,
+                color: Color::WHITE,
+            }),
+        ])
+        .with_text_alignment(TextAlignment::TOP_CENTER)
+        .with_style(Style {
+            position_type: PositionType::Absolute,
+            position: UiRect {
+                top: Val::Px(5.0),
+                left: Val::Px(15.0),
+                ..default()
+            },
+            ..default()
+        }),
+        ScoreBoard(),
+    ));
     commands.spawn((
         //ball
         SpriteBundle {
@@ -82,6 +132,7 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
         },
         Velocity(0., 0.),
         Collision(false, false, false, false),
+        Score(0),
         Lifes(3),
         Player,
     ));
@@ -100,6 +151,17 @@ fn check_ball_collision(
             ball_dir.0 = ball_dir.0 * -1.2 + player_vel.0;
             ball_dir.1 = ball_dir.1 * -1.1;
         }
+    }
+}
+
+fn update_scoreboard(
+    player_query: Query<(&Score, &Lifes), With<Player>>,
+    mut scoreboard_query: Query<&mut Text, With<ScoreBoard>>,
+) {
+    let (score, lifes) = player_query.single();
+    for mut text in &mut scoreboard_query {
+        text.sections[1].value = format!("{:?}", score.0);
+        text.sections[3].value = format!("{:?}", lifes.0);
     }
 }
 
