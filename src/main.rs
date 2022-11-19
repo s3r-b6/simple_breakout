@@ -1,4 +1,5 @@
 use bevy::prelude::*;
+use bevy::diagnostic::{FrameTimeDiagnosticsPlugin, LogDiagnosticsPlugin};
 
 #[derive(Component)]
 struct Velocity(f32, f32);
@@ -19,6 +20,8 @@ struct Collision(bool, bool, bool, bool);
 fn main() {
     App::new()
         .add_plugins(DefaultPlugins)
+        .add_plugins(LogDiagnosticsPlugin::default())
+        .add_plugins(FrameTimeDiagnosticsPlugin::default())
         .add_startup_system(setup)
         .add_system(ball_movement)
         .add_system(player_controller)
